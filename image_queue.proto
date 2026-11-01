@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package imagequeue;
+
+// Layanan antrian gambar: upload -> diproses grayscale di latar belakang -> download.
+service ImageQueue {
+  // Client streaming: client mengirim gambar per chunk, server membalas job_id.
+  rpc UploadImage(stream UploadChunk) returns (UploadReply);
+
+  // Unary: cek status satu pekerjaan.
+  rpc GetStatus(StatusRequest) returns (StatusReply);
+
+  // Server streaming: server mengirim hasil grayscale per chunk.
+  rpc DownloadResult(DownloadRequest) returns (stream ResultChunk);
+
+  // Unary: daftar semua pekerjaan milik satu client.
+  rpc ListJobs(ListJobsRequest) returns (ListJobsReply);
+}
+
+enum JobStatus {
+  UNKNOWN = 0;
+  QUEUED = 1;
+  PROCESSING = 2;
+  DONE = 3;
+  FAILED = 4;
+}
+
+message UploadChunk {
+  string request_id = 1;  // ID unik per upload, dipakai untuk idempotensi (sama saat retry)
+  string client_id = 2;
+  string filename = 3;
+  bytes data = 4;         // potongan isi file
+}
+
+message UploadReply {
+  string job_id = 1;
+  bool duplicate = 2;     // true jika request_id ini sudah pernah diproses
+}
+
+message StatusRequest {
+  string job_id = 1;
+}
+
+message StatusReply {
+  string job_id = 1;
+  JobStatus status = 2;
+  string error = 3;       // terisi jika FAILED
+}
+
+message DownloadRequest {
+  string job_id = 1;
+}
+
+message ResultChunk {
+  bytes data = 1;
+}
+
+message ListJobsRequest {
+  string client_id = 1;
+}
+
+message JobInfo {
+  string job_id = 1;
+  string filename = 2;
+  JobStatus status = 3;
+}
+
+message ListJobsReply {
+  repeated JobInfo jobs = 1;
+}
