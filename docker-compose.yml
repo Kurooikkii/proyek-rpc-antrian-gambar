@@ -1,0 +1,30 @@
+# Dua container terpisah (server dan client) di jaringan yang sama, sesuai syarat demo.
+#
+#   docker compose up --build -d server     jalankan container server
+#   docker compose ps                        cek status (harus healthy)
+#   docker compose run --rm client           jalankan demo B dari container client
+#   docker compose logs server               lihat log server
+#   docker compose down                      matikan semua
+
+services:
+  server:
+    build: .
+    command: ["python", "server.py", "2"]      # angka 2 = jumlah worker
+    ports:
+      - "50051:50051"                          # supaya komputer lain bisa menjangkau server
+    healthcheck:
+      test: ["CMD", "python", "-c", "import grpc; grpc.channel_ready_future(grpc.insecure_channel('localhost:50051')).result(timeout=3)"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+      start_period: 3s
+
+  client:
+    build: .
+    command: ["python", "demo_b.py", "server:50051"]
+    environment:
+      GRPC_SERVER: "server:50051"              # di dalam jaringan Docker, server dipanggil lewat nama layanannya
+    depends_on:
+      server:
+        condition: service_healthy
+    profiles: ["tools"]                        # tidak ikut jalan otomatis; dipanggil lewat "docker compose run client"
