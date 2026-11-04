@@ -1,8 +1,0 @@
-__pycache__/
-*.pyc
-uploads/
-hasil*.png
-foto*.jpg
-.git/
-.venv/
-*.zip

@@ -1,0 +1,7 @@
+.git/
+.venv/
+__pycache__/
+*.pyc
+*.zip
+uploads/
+proyek-rpc-antrian-gambar-main/
