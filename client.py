@@ -2,6 +2,8 @@
 
 Pemakaian: python client.py <gambar_input> <gambar_output> [host:port]
 """
+import os
+import random
 import sys
 import time
 import uuid
@@ -12,21 +14,35 @@ import image_queue_pb2 as pb
 import image_queue_pb2_grpc as pb_grpc
 
 CHUNK_SIZE = 64 * 1024
-TIMEOUT = 5.0       # detik per panggilan
-MAX_RETRY = 3
+TIMEOUT = 5.0        # detik batas waktu tiap panggilan RPC
+MAX_RETRY = 3        # jumlah percobaan maksimal per panggilan
+BASE_DELAY = 0.5     # jeda sebelum retry pertama; berlipat ganda tiap retry (exponential backoff)
+RETRYABLE = (grpc.StatusCode.DEADLINE_EXCEEDED, grpc.StatusCode.UNAVAILABLE)
 
 
-def with_retry(fn):
-    """Jalankan fn(); ulangi bila timeout/server tidak tersedia."""
+def log(msg):
+    print(f"    [client] {msg}", flush=True)
+
+
+def with_retry(fn, label="panggilan"):
+    """Jalankan fn(); ulangi dengan exponential backoff bila timeout atau server tidak tersedia.
+
+    Aman diulang karena upload membawa request_id yang sama di setiap percobaan,
+    sehingga server mengenali kiriman ulang dan tidak membuat pekerjaan ganda.
+    """
     for attempt in range(1, MAX_RETRY + 1):
         try:
             return fn()
         except grpc.RpcError as e:
-            retryable = e.code() in (grpc.StatusCode.DEADLINE_EXCEEDED,
-                                     grpc.StatusCode.UNAVAILABLE)
-            if not retryable or attempt == MAX_RETRY:
+            code = e.code()
+            if code not in RETRYABLE:
+                raise                                   # error permanen (misalnya file terlalu besar): jangan diulang
+            if attempt == MAX_RETRY:
+                log(f"{label}: {code.name}, menyerah setelah {attempt} percobaan")
                 raise
-            time.sleep(0.5 * attempt)   # TODO: coba exponential backoff
+            delay = BASE_DELAY * 2 ** (attempt - 1) + random.uniform(0, 0.1)   # 0,5 dtk, 1 dtk, ... plus jitter
+            log(f"{label}: {code.name} (percobaan {attempt}/{MAX_RETRY}), coba lagi dalam {delay:.1f} detik")
+            time.sleep(delay)
 
 
 def upload(stub, path, client_id, request_id=None):
@@ -41,14 +57,14 @@ def upload(stub, path, client_id, request_id=None):
                 yield pb.UploadChunk(request_id=request_id, client_id=client_id,
                                      filename=path, data=data)
 
-    return with_retry(lambda: stub.UploadImage(gen(), timeout=TIMEOUT))
+    return with_retry(lambda: stub.UploadImage(gen(), timeout=TIMEOUT), "upload")
 
 
 def wait_done(stub, job_id, poll=0.2, limit=60):
     start = time.time()
     while time.time() - start < limit:
         r = with_retry(lambda: stub.GetStatus(pb.StatusRequest(job_id=job_id),
-                                              timeout=TIMEOUT))
+                                              timeout=TIMEOUT), "cek status")
         if r.status in (pb.DONE, pb.FAILED):
             return r
         time.sleep(poll)
@@ -60,20 +76,36 @@ def download(stub, job_id, out_path):
         return b"".join(c.data for c in
                         stub.DownloadResult(pb.DownloadRequest(job_id=job_id),
                                             timeout=TIMEOUT))
-    data = with_retry(call)
+    data = with_retry(call, "download")
     with open(out_path, "wb") as f:
         f.write(data)
 
 
+def main(argv):
+    if len(argv) < 3:
+        print("Pemakaian: python client.py <gambar_input> <gambar_output> [host:port]")
+        return 2
+    src, dst = argv[1], argv[2]
+    target = argv[3] if len(argv) > 3 else os.environ.get("GRPC_SERVER", "localhost:50051")
+    if not os.path.isfile(src):
+        print(f"File tidak ditemukan: {src}")
+        return 2
+    try:
+        with grpc.insecure_channel(target) as channel:
+            stub = pb_grpc.ImageQueueStub(channel)
+            reply = upload(stub, src, client_id="client-1")
+            print("job_id:", reply.job_id, "(duplikat)" if reply.duplicate else "")
+            status = wait_done(stub, reply.job_id)
+            print("status:", pb.JobStatus.Name(status.status), status.error)
+            if status.status == pb.DONE:
+                download(stub, reply.job_id, dst)
+                print("hasil disimpan di", dst)
+                return 0
+            return 1
+    except grpc.RpcError as e:
+        print(f"Gagal: {e.code().name} - {e.details()}")
+        return 1
+
+
 if __name__ == "__main__":
-    src, dst = sys.argv[1], sys.argv[2]
-    target = sys.argv[3] if len(sys.argv) > 3 else "localhost:50051"
-    with grpc.insecure_channel(target) as channel:
-        stub = pb_grpc.ImageQueueStub(channel)
-        reply = upload(stub, src, client_id="client-1")
-        print("job_id:", reply.job_id, "(duplikat)" if reply.duplicate else "")
-        status = wait_done(stub, reply.job_id)
-        print("status:", pb.JobStatus.Name(status.status), status.error)
-        if status.status == pb.DONE:
-            download(stub, reply.job_id, dst)
-            print("hasil disimpan di", dst)
+    sys.exit(main(sys.argv))

@@ -1,32 +1,62 @@
-# Antrian Gambar gRPC (Studi Kasus 5)
 
-Upload gambar per chunk -> antrian -> worker ubah ke grayscale -> cek status -> download hasil.
+# Antrian Gambar gRPC
 
-## Instalasi
-```bash
-pip install -r requirements.txt
+Client mengunggah gambar per chunk. Server memasukkan pekerjaan ke antrian, memprosesnya dengan worker menjadi grayscale, lalu client mengunduh hasilnya.
+
+## Menjalankan di Windows
+
+Buka PowerShell pada folder project ini:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. image_queue.proto
 ```
-Perintah kedua menghasilkan stub (`image_queue_pb2.py` dan `image_queue_pb2_grpc.py`).
 
-## Menjalankan
-```bash
-python server.py 2                      # 2 worker (ubah angkanya untuk eksperimen)
-python client.py foto.jpg hasil.png     # terminal lain
-python client.py foto.jpg hasil.png IP_SERVER:50051   # dari komputer/container lain
+Jika aktivasi virtual environment diblokir PowerShell, jalankan `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`, lalu aktifkan ulang.
+
+Buka terminal pertama dan jalankan server:
+
+```powershell
+python server.py 2
 ```
 
+Buka terminal kedua, aktifkan virtual environment yang sama, lalu jalankan client dengan path gambar milik Anda:
+
+```powershell
+python client.py "D:\path\foto.jpg" "D:\path\hasil.png"
+```
+
+Untuk menjalankan demo retry dan kegagalan server:
+
+```powershell
+python demo_b.py --pause
+```
+
+Server harus tetap berjalan saat client atau demo dijalankan. Angka `2` pada server adalah jumlah worker.
+
+## Menjalankan dengan Docker
+
+Pastikan Docker Desktop aktif, lalu jalankan dari folder yang berisi `docker-compose.yml`:
+
+```powershell
+docker compose up --build -d server
+docker compose ps
+docker compose run --rm client
+docker compose logs -f server
+docker compose down
+```
+
+Client container terhubung ke server melalui `server:50051`. Perintah `docker compose run --rm client` menjalankan demo B.
+
 ## RPC
+
 | RPC | Jenis |
 |---|---|
-| UploadImage | client streaming |
-| GetStatus | unary |
-| DownloadResult | server streaming |
-| ListJobs | unary |
+| UploadImage | Client streaming |
+| GetStatus | Unary |
+| DownloadResult | Server streaming |
+| ListJobs | Unary |
 
-## Yang masih perlu dikerjakan kelompok
-- [ ] Docker: `Dockerfile` dan `docker-compose.yml` (server dan client di container berbeda)
-- [ ] Skrip uji kinerja (`benchmark.py`): latensi dan throughput untuk 1, 5, 20 client
-- [ ] Uji kegagalan: matikan server di tengah proses, buktikan retry tidak membuat job ganda
-- [ ] Eksperimen 1 worker vs 4 worker, tabel dan grafik
-- [ ] Laporan PDF dan video demo
+Client mencoba ulang timeout dan server yang tidak tersedia hingga tiga kali. Upload mengirim `request_id` yang sama saat retry agar server tidak membuat job ganda.
